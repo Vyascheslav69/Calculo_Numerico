@@ -1,106 +1,183 @@
 import java.io.BufferedReader;
 import java.io.FileReader;
+import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 
 public class RegressaoQuadratica {
 
-    public static void main(String[] args) {
-        List<Double> xList = new ArrayList<>();
-        List<Double> yList = new ArrayList<>();
+    private static final int MINIMO_DE_PONTOS = 4;
 
-        // PASSO 1: Leitura direta do arquivo dados.csv
-        try (BufferedReader br = new BufferedReader(new FileReader("dados.csv"))) {
+    public static void main(String[] args) {
+        String arquivo = (args.length > 0) ? args[0] : "dados.csv";
+
+        try {
+            // ler os pontos do arquivo CSV.
+            double[][] pontos = lerCsv(arquivo);
+            double[] x = pontos[0];
+            double[] y = pontos[1];
+
+            // montar e resolver as equações normais.
+            double[] alfas = calcularRegressaoQuadratica(x, y);
+
+            // imprimir α2, α1 e α0.
+            imprimirSolucao(alfas);
+
+        } catch (IOException e) {
+            System.err.println("Erro ao ler o arquivo " + arquivo + ": " + e.getMessage());
+            System.exit(1);
+        } catch (IllegalArgumentException e) {
+            System.err.println("Erro: " + e.getMessage());
+            System.exit(1);
+        }
+    }
+
+    // LEITURA DO CSV
+    static double[][] lerCsv(String caminho) throws IOException {
+        List<double[]> pontos = new ArrayList<>();
+
+        try (BufferedReader leitor = new BufferedReader(new FileReader(caminho))) {
             String linha;
-            while ((linha = br.readLine()) != null) {
+            int numeroDaLinha = 0;
+
+            while ((linha = leitor.readLine()) != null) {
+                numeroDaLinha++;
                 linha = linha.trim();
+
                 if (linha.isEmpty()) {
                     continue;
                 }
+
+                // Separa o x do f(x) usando a vírgula.
                 String[] partes = linha.split(",");
-                if (partes.length >= 2) {
-                    xList.add(Double.parseDouble(partes[0].trim()));
-                    yList.add(Double.parseDouble(partes[1].trim()));
+                if (partes.length != 2) {
+                    throw new IllegalArgumentException("linha " + numeroDaLinha
+                            + " deveria ter o formato x,f(x): \"" + linha + "\"");
+                }
+
+                try {
+                    double xi = Double.parseDouble(partes[0].trim());
+                    double yi = Double.parseDouble(partes[1].trim());
+                    pontos.add(new double[] {xi, yi});
+                } catch (NumberFormatException e) {
+                    throw new IllegalArgumentException("linha " + numeroDaLinha
+                            + " contém um valor que não é número: \"" + linha + "\"");
                 }
             }
-        } catch (Exception e) {
-            System.err.println("Erro ao ler o arquivo dados.csv: " + e.getMessage());
-            return;
         }
 
-        int n = xList.size();
-        if (n < 4) {
-            System.err.println("É necessário fornecer no mínimo 4 pontos.");
-            return;
-        }
-
-        // PASSO 2: Somatórios
-        double sumX = 0, sumX2 = 0, sumX3 = 0, sumX4 = 0;
-        double sumY = 0, sumXY = 0, sumX2Y = 0;
-
+        // Copia a lista para dois vetores simples (x e y)
+        int n = pontos.size();
+        double[] x = new double[n];
+        double[] y = new double[n];
         for (int i = 0; i < n; i++) {
-            double x = xList.get(i);
-            double y = yList.get(i);
-            double x2 = x * x;
-
-            sumX += x;
-            sumX2 += x2;
-            sumX3 += x2 * x;
-            sumX4 += x2 * x2;
-
-            sumY += y;
-            sumXY += x * y;
-            sumX2Y += x2 * y;
+            x[i] = pontos.get(i)[0];
+            y[i] = pontos.get(i)[1];
         }
-
-        // PASSO 3: Matriz M e vetor B
-        double[][] M = {
-            {sumX4, sumX3, sumX2},
-            {sumX3, sumX2, sumX},
-            {sumX2, sumX, (double) n}
-        };
-
-        double[] B = {sumX2Y, sumXY, sumY};
-
-        // PASSO 4: Regra de Cramer
-        double detM = calcularDeterminante3x3(M);
-
-        if (Math.abs(detM) < 1e-12) {
-            System.err.println("O sistema não possui solução única (determinante nulo).");
-            return;
-        }
-
-        double[][] M2 = {
-            {B[0], M[0][1], M[0][2]},
-            {B[1], M[1][1], M[1][2]},
-            {B[2], M[2][1], M[2][2]}
-        };
-
-        double[][] M1 = {
-            {M[0][0], B[0], M[0][2]},
-            {M[1][0], B[1], M[1][2]},
-            {M[2][0], B[2], M[2][2]}
-        };
-
-        double[][] M0 = {
-            {M[0][0], M[0][1], B[0]},
-            {M[1][0], M[1][1], B[1]},
-            {M[2][0], M[2][1], B[2]}
-        };
-
-        double alpha2 = calcularDeterminante3x3(M2) / detM;
-        double alpha1 = calcularDeterminante3x3(M1) / detM;
-        double alpha0 = calcularDeterminante3x3(M0) / detM;
-
-        // PASSO 5: Saída dos coeficientes
-        System.out.printf("%.6f%n", alpha2);
-        System.out.printf("%.6f%n", alpha1);
-        System.out.printf("%.6f%n", alpha0);
+        return new double[][] {x, y};
     }
 
-    private static double calcularDeterminante3x3(double[][] m) {
+    // CÁLCULO DOS COEFICIENTES α2, α1, α0
+    /* Calcula α2, α1 e α0 da parábola φ(x) = α2·x² + α1·x + α0 que melhor se ajusta aos pontos
+     * Retorna o vetor {α2, α1, α0}. */
+
+    static double[] calcularRegressaoQuadratica(double[] x, double[] y) {
+        int n = x.length;
+
+        // O trabalho exige no mínimo 4 pontos.
+        if (n < MINIMO_DE_PONTOS) {
+            throw new IllegalArgumentException("são necessários no mínimo "
+                    + MINIMO_DE_PONTOS + " pontos, mas o arquivo tem " + n + ".");
+        }
+
+        // Uma parábola só fica bem definida se existirem pelo menos 3 valores de x DIFERENTES.
+        Set<Double> xDistintos = new HashSet<>();
+        for (double xi : x) {
+            xDistintos.add(xi);
+        }
+        if (xDistintos.size() < 3) {
+            throw new IllegalArgumentException("são necessários pelo menos 3 valores"
+                    + " de x diferentes para definir uma parábola única.");
+        }
+
+        // Calcular os somatórios
+        // Percorre os pontos uma vez e acumula todas as somas que aparecem nas equações normais.
+        double somaX = 0, somaX2 = 0, somaX3 = 0, somaX4 = 0;
+        double somaY = 0, somaXY = 0, somaX2Y = 0;
+
+        for (int i = 0; i < n; i++) {
+            double xi = x[i];
+            double yi = y[i];
+
+            // Reaproveitar as potências já calculadas
+            double xi2 = xi * xi;     // x²
+            double xi3 = xi2 * xi;    // x³ = x² · x
+            double xi4 = xi2 * xi2;   // x⁴ = x² · x²
+
+            somaX   += xi;
+            somaX2  += xi2;
+            somaX3  += xi3;
+            somaX4  += xi4;
+
+            somaY   += yi;
+            somaXY  += xi * yi;
+            somaX2Y += xi2 * yi;
+        }
+
+        // montar a matriz M e o vetor B (M · α = B)
+        double[][] M = {
+            {somaX4, somaX3, somaX2},
+            {somaX3, somaX2, somaX },
+            {somaX2, somaX,  n     }
+        };
+        double[] B = {somaX2Y, somaXY, somaY};
+
+        // PASSO 4: resolver o sistema pela Regra de Cramer
+        return resolverPorCramer(M, B);
+    }
+
+    // Resolve um sistema linear 3x3  M · α = B  pela REGRA DE CRAMER.
+    static double[] resolverPorCramer(double[][] M, double[] B) {
+        double detM = determinante3x3(M);
+
+        // Se det(M) = 0 não existe solução única
+        if (detM == 0.0) {
+            throw new IllegalArgumentException("o sistema não possui solução única"
+                    + " (determinante igual a zero).");
+        }
+
+        double[] solucao = new double[3];
+        for (int coluna = 0; coluna < 3; coluna++) {
+            double[][] Mj = trocarColuna(M, coluna, B);
+            solucao[coluna] = determinante3x3(Mj) / detM;
+        }
+        return solucao; // {α2, α1, α0}
+    }
+
+    // Devolve cópia da matriz M com a coluna indicada substituída pelo vetor B.
+    private static double[][] trocarColuna(double[][] M, int coluna, double[] B) {
+        double[][] copia = new double[3][3];
+        for (int linha = 0; linha < 3; linha++) {
+            copia[linha] = M[linha].clone();
+            copia[linha][coluna] = B[linha];
+        }
+        return copia;
+    }
+
+    // Determinante de uma matriz 3x3 pela expansão de Laplace
+    private static double determinante3x3(double[][] m) {
         return m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
              - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
              + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+    }
+
+    // print solução
+    static void imprimirSolucao(double[] alfas) {
+        System.out.printf(Locale.US, "%.6f%n", alfas[0]); // α2
+        System.out.printf(Locale.US, "%.6f%n", alfas[1]); // α1
+        System.out.printf(Locale.US, "%.6f%n", alfas[2]); // α0
     }
 }
